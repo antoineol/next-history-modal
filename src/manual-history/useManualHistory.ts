@@ -1,107 +1,99 @@
 import { useRouter } from 'next/router';
-import { useCallback, useEffect, useId, useMemo, useRef } from 'react';
-
-// Disabled for now, since it has a couple of bugs and is not a hight priority feature.
-const enableHistory = false;
-
-// We could improve the hook by restoring the modale when going back to the pushed history entry.
-// E.g. replace handleUserPressedBrowserBack with pushNoHistory + popNoHistory.
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 /**
  * Note: specific to NextJS applications. It manipulates the history, bypassing the Next.js routing.
  * @param pushNoHistory Function to call when the user goes forward in the history with the browser controls. Use it to update the app yourself, e.g. open a modal.
  * @param popNoHistory Function to call when the user goes back in the history with the browser controls. Use it to update the app yourself, e.g. close a modal.
- * @param uncontrolled By default, the returned push/pop functions call respectively pushNoHistory and popNoHistory. If `uncontrolled` is true, they won't be called. Useful for cases when the event where you want to push already triggered `pushNoHistory` out of your control (e.g. if focus/blur is the trigger).
+ * @param queryKey A unique ID for the usage of the hook, ideally a constant value, different for each usage, so that it persists across refreshes. It is used to detect which query parameter should be used with the history.
  * @returns push and pop function you must call on events that should add or remove a manual history entry, e.g. when the user opens or closes a modal.
  * @example ```ts
  * const [open, setOpen] = useState(false);
+ * const openModalRaw = useCallback(() => setOpen(true), []);
  * const closeModalRaw = useCallback(() => setOpen(false), []);
  *
- * const { push, pop } = useManualHistory(closeModalRaw);
- *
- * const openModal = useCallback(() => {
- *   setOpen(true);
- *   push();
- * }, [push]);
- *
- * const closeModal = useCallback(() => {
- *   closeModalRaw();
- *   pop();
- * }, [closeModalRaw, pop]);
+ * const { push: openModal, pop: closeModal } = useManualHistory(openModalRaw, closeModalRaw, { id: 'myModal' });
  * ```
  */
-export function useManualHistory(pushNoHistory: VoidFunction, popNoHistory: VoidFunction, uncontrolled?: boolean) {
+export function useManualHistory(pushNoHistory: VoidFunction, popNoHistory: VoidFunction, queryKey: string) {
   const router = useRouter();
 
-  // Ref used to store whether we have pushed a state, to indicate that the nextjs routing has been temporarily disabled, as a check and to re-enable it when leaving this state.
-  const closingSuggestionsRef = useRef(false);
-  // Used as a unique reference of an instance of hook, to call the navigation code only when the events are related to the current instance of hook.
-  const id = useId();
+  const hasOpenModalQueryParam = queryKey in router.query;
+
+  // Keep track of the open state to deduplicate.
+  const isOpenRef = useRef(false);
+
+  const initializedModalRef = useRef(false);
+  useEffect(() => {
+    if (!initializedModalRef.current && router.isReady) {
+      initializedModalRef.current = true;
+      const shouldShowModal = hasOpenModalQueryParam;
+      if (shouldShowModal && !isOpenRef.current) {
+        isOpenRef.current = true;
+        pushNoHistory();
+      }
+    }
+  }, [hasOpenModalQueryParam, pushNoHistory, queryKey, router.isReady, router.query]);
 
   useEffect(() => {
-    if (enableHistory) {
-      function handlePopstate(e: PopStateEvent) {
-        if (window.history.state?.__semio_modale_ref === id) {
-          if (closingSuggestionsRef.current && e.state?.__semio_modale_from) {
-            popNoHistory();
-            router.beforePopState(() => true);
-            closingSuggestionsRef.current = false;
-          }
-          if (e.state?.__semio_modale_to) {
-            closingSuggestionsRef.current = true;
-            router.beforePopState(() => false);
-            pushNoHistory();
-          }
-        }
+    const checkOpenModal: RouteChangeStart = (url /* , { shallow } */) => {
+      const modalParam = readNextJSURLQueryParam(url, queryKey);
+
+      const shouldShowModal = modalParam !== null;
+      if (shouldShowModal && !isOpenRef.current) {
+        isOpenRef.current = true;
+        pushNoHistory();
       }
+    };
 
-      window.addEventListener('popstate', handlePopstate);
+    const checkCloseModal: RouteChangeStart = (url /* , { shallow } */) => {
+      const modalParam = readNextJSURLQueryParam(url, queryKey);
+      const shouldHideModal = modalParam === null;
+      if (shouldHideModal && isOpenRef.current) {
+        isOpenRef.current = false;
+        popNoHistory();
+      }
+    };
 
-      return () => {
-        window.removeEventListener('popstate', handlePopstate);
-      };
-    }
-    return; // to avoid an eslint warning
-  }, [id, popNoHistory, pushNoHistory, router]);
+    router.events.on('routeChangeStart', checkCloseModal);
+    router.events.on('routeChangeComplete', checkOpenModal);
+
+    return () => {
+      router.events.off('routeChangeStart', checkCloseModal);
+      router.events.off('routeChangeComplete', checkOpenModal);
+    };
+  }, [hasOpenModalQueryParam, popNoHistory, pushNoHistory, queryKey, router.events, router.query]);
 
   const push = useCallback(() => {
-    if (enableHistory) {
-      closingSuggestionsRef.current = true;
-      router.beforePopState(() => false);
-      window.history.replaceState(
-        {
-          ...window.history.state,
-          __semio_modale_from: true,
-          __semio_modale_ref: id,
-        },
-        ''
-      );
-      window.history.pushState(
-        {
-          ...window.history.state,
-          __semio_modale_to: true,
-          __semio_modale_ref: id,
-        },
-        ''
-      );
-    }
-    if (!uncontrolled) {
+    router.push({ pathname: router.pathname, query: { ...router.query, [queryKey]: '' } }, undefined, {
+      shallow: true,
+    });
+    if (!isOpenRef.current) {
       // The original push handler
+      isOpenRef.current = true;
       pushNoHistory();
     }
-  }, [id, pushNoHistory, router, uncontrolled]);
+  }, [pushNoHistory, queryKey, router]);
 
   const pop = useCallback(() => {
-    if (enableHistory) {
-      if (window.history.state?.__semio_modale_ref === id && window.history.state?.__semio_modale_to) {
-        window.history.back();
-      }
+    if (hasOpenModalQueryParam) {
+      router.back();
     }
-    if (!uncontrolled) {
+    if (isOpenRef.current) {
       // The original pop handler
+      isOpenRef.current = false;
       popNoHistory();
     }
-  }, [id, popNoHistory, uncontrolled]);
+  }, [hasOpenModalQueryParam, popNoHistory, router]);
 
   return useMemo(() => ({ push, pop }), [pop, push]);
+}
+
+type RouteChangeStart = (url: string, { shallow }: { shallow: boolean }) => void;
+
+function readNextJSURLQueryParam(url: string, key: string) {
+  const i = url.indexOf('?');
+  if (i === -1) return null;
+  url = url.substring(i); // Extract the "search" fragment
+  return new URLSearchParams(url).get(key);
 }

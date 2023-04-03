@@ -16,7 +16,9 @@ export default function Home() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" href="/favicon.ico" />
       </Head>
-      <main className={classes.main}>
+      {/* padding-left: trick to not shift the content when the modal is open and the scroll is disabled. */}
+      {/* https://stackoverflow.com/a/30293718/4053349 */}
+      <main className={classes.main} style={{ paddingLeft: 'calc(100vw - 100%)' }}>
         <div className={`${classes.description} ${classes.center}`}>
           <BrowsableModal />
         </div>

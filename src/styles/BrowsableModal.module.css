@@ -9,6 +9,12 @@
   transition: background 150ms, border 150ms;
 }
 
+/* Hide scrollbar when the modal is open. It is combined with a style trick in index.tsx to avoid shifting the main content when its scrollbar is hidden. */
+.htmlOpenClassName,
+.bodyOpenClassName {
+  overflow: hidden;
+}
+
 .modalOverlay {
   position: fixed;
   top: 0;
